@@ -93,7 +93,9 @@ func (p *Pager) GetNext(c *Client, out interface{}) error {
 		return io.EOF
 	}
 
-	return c.GetAndDecode(p.Next, out)
+	next := p.Next
+	p.Next = ""
+	return c.GetAndDecode(next, out)
 }
 
 // GetInstrument returns a list of option-typed instruments given a list of
