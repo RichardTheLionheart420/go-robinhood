@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pkg/errors"
+	"golang.org/x/crypto/ssh/terminal"
 	"golang.org/x/oauth2"
 )
 
@@ -18,6 +21,36 @@ const DefaultClientID = "c82SH0WZOsabOXGP2sxqcj34FxkvfnWRZBKlBjFS"
 // OAuth implements oauth2 using the robinhood implementation
 type OAuth struct {
 	Endpoint, ClientID, Username, Password, MFA string
+
+	PasswordProvider CredentialGetter
+	MFAProvider      CredentialGetter
+}
+
+type CredentialGetter interface {
+	GetCredential() (string, error)
+}
+
+type terminalCredentialGetter struct {
+	prompt string
+}
+
+func NewTerminalCredentialGetter(prompt string) CredentialGetter {
+	return &terminalCredentialGetter{
+		prompt: prompt,
+	}
+}
+
+func (p *terminalCredentialGetter) GetCredential() (string, error) {
+	if !terminal.IsTerminal(int(os.Stdin.Fd())) {
+		return "", errors.New("robinhood/oauth: requesting terminal credentials outside of a tty")
+	}
+	fmt.Print(p.prompt)
+	cred, err := terminal.ReadPassword(int(syscall.Stdin))
+	if err != nil {
+		return "", err
+	}
+	fmt.Print("\n")
+	return string(cred), nil
 }
 
 // ErrMFARequired indicates the MFA was required but not provided.
@@ -25,6 +58,21 @@ var ErrMFARequired = fmt.Errorf("Two Factor Auth code required and not supplied"
 
 // Token implements TokenSource
 func (p *OAuth) Token() (*oauth2.Token, error) {
+	if p.PasswordProvider != nil {
+		password, err := p.PasswordProvider.GetCredential()
+		if err != nil {
+			return nil, errors.Wrap(err, "could not get password")
+		}
+		p.Password = password
+	}
+	if p.MFAProvider != nil {
+		mfa, err := p.MFAProvider.GetCredential()
+		if err != nil {
+			return nil, errors.Wrap(err, "could not get mfa")
+		}
+		p.MFA = mfa
+	}
+
 	ep := p.Endpoint
 	if ep == "" {
 		ep = EPLogin
